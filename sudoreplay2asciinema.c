@@ -12,10 +12,11 @@ static unsigned char *escape(unsigned char *data, int *data_size)
     int esc_pos, data_pos;
     ssize_t esc_size = 4096;
     unsigned char *esc = malloc(esc_size);
+    u_int32_t unicode;
     esc[0] = 0;
 
     for(esc_pos = data_pos = 0; data_pos < *data_size; data_pos++) {
-        if((esc_pos + 16) >= esc_size) {
+        if((esc_pos + 16) > esc_size) {
             esc_size += 4096;
             esc = realloc(esc, esc_size);
         }
@@ -28,6 +29,24 @@ static unsigned char *escape(unsigned char *data, int *data_size)
         } else if((data[data_pos] < 32) || (data[data_pos] == '\\')) {
             sprintf((char *)&esc[esc_pos], "\\u%04x", (unsigned char)data[data_pos]);
             esc_pos += 6;
+        } else if((data[data_pos] & 248 == 240) && ((*data_size - data_pos) > 4)) {
+            // Unicode 4 bytes
+            unicode = ((data[data_pos] & 0x07) << 18) + ((data[data_pos + 2] & 0x3F) << 12) + ((data[data_pos + 2] & 0x3F) << 6) + (data[data_pos + 3] & 0x3F);
+            sprintf((char *)&esc[esc_pos], "\\u%04x", unicode);
+            data_pos += 3;
+            esc_pos += 4;
+        } else if((data[data_pos] & 248 == 224) && ((*data_size - data_pos) > 3)) {
+            // Unicode 3 bytes
+            unicode = ((data[data_pos] & 0x0F) << 12) + ((data[data_pos + 1] & 0x3F) << 6) + (data[data_pos + 2] & 0x3F);
+            sprintf((char *)&esc[esc_pos], "\\u%04x", unicode);
+            data_pos += 2;
+            esc_pos += 4;
+        } else if((data[data_pos] & 248 == 192) && ((*data_size - data_pos) > 2)) {
+            // Unicode 2 bytes
+            unicode = ((data[data_pos] & 0x1F) << 6) & (data[data_pos + 1] & 0x3F);
+            sprintf((char *)&esc[esc_pos], "\\u%04x", unicode);
+            data_pos += 1;
+            esc_pos += 4;
         } else {
             esc[esc_pos] = data[data_pos];
             esc_pos++;
@@ -55,10 +74,21 @@ static FILE *open_file(const char *dir, const char *file)
 
 int main(int argc, char *argv[])
 {
+    FILE *output;
+
     if(argc < 2) {
         fprintf(stderr, "Syntax error\n\n");
-        fprintf(stderr, "sudo2asciinema <dir>\n");
+        fprintf(stderr, "sudo2asciinema <dir> [output]\n");
         exit(EXIT_FAILURE);
+    }
+
+    if(argc < 3) {
+        output = stdout;
+    } else {
+        if((output = fopen(argv[2], "w+")) == NULL) {
+            perror(argv[2]);
+            exit(EXIT_FAILURE);
+        }
     }
 
     char *basedir = argv[1];
@@ -93,24 +123,24 @@ int main(int argc, char *argv[])
     free(line);
 
     // print header
-    printf("{\n");
-    printf("  \"version\": %u,\n", 1);
-    printf("  \"width\": %u,\n", 89);
-    printf("  \"height\": %u,\n", 26);
-    printf("  \"duration\": %f,\n", 27.221634);
-    printf("  \"command\": null,\n");
-    printf("  \"title\": null,\n");
-    printf("  \"start\": %s,\n", timestamp);
-    printf("  \"user\": \"%s\",\n", user);
-    printf("  \"group\": \"%s\",\n", group);
-    printf("  \"terminal\": \"%s\",\n", terminal);
-    printf("  \"home\": \"%s\",\n", home);
-    printf("  \"command\": \"%s\",\n", command);
-    printf("  \"env\": {\n");
-    printf("    \"TERM\": \"xterm-256color\",\n");
-    printf("    \"SHELL\": \"/bin/bash\"\n");
-    printf("  },\n");
-    printf("  \"stdout\": [\n");
+    fprintf(output, "{\n");
+    fprintf(output, "  \"version\": %u,\n", 1);
+    fprintf(output, "  \"width\": %u,\n", 89);
+    fprintf(output, "  \"height\": %u,\n", 26);
+    fprintf(output, "  \"duration\": %f,\n", 27.221634);
+    fprintf(output, "  \"command\": null,\n");
+    fprintf(output, "  \"title\": null,\n");
+    fprintf(output, "  \"start\": %s,\n", timestamp);
+    fprintf(output, "  \"user\": \"%s\",\n", user);
+    fprintf(output, "  \"group\": \"%s\",\n", group);
+    fprintf(output, "  \"terminal\": \"%s\",\n", terminal);
+    fprintf(output, "  \"home\": \"%s\",\n", home);
+    fprintf(output, "  \"command\": \"%s\",\n", command);
+    fprintf(output, "  \"env\": {\n");
+    fprintf(output, "    \"TERM\": \"xterm-256color\",\n");
+    fprintf(output, "    \"SHELL\": \"/bin/bash\"\n");
+    fprintf(output, "  },\n");
+    fprintf(output, "  \"stdout\": [\n");
 
     // get stream chunk
     int op;
@@ -128,9 +158,9 @@ int main(int argc, char *argv[])
         sscanf(line, "%u %f %u", &op, &duration, &bytes);
         free(line);
         if(first) first = 0;
-        else printf("    ],\n");
-        printf("    [\n");
-        printf("      %f,\n", duration);
+        else fprintf(output, "    ],\n");
+        fprintf(output, "    [\n");
+        fprintf(output, "      %f,\n", duration);
 
         data = malloc(bytes);
         if(fread(data, bytes, 1, fdttyout) != 1) {
@@ -139,19 +169,22 @@ int main(int argc, char *argv[])
         }
         escape_data = escape(data, &bytes);
         free(data);
-        printf("      \"%*s\"\n", bytes, escape_data);
+        fprintf(output, "      \"");
+        fwrite(escape_data, bytes, 1, output);
+        fprintf(output, "\"\n");
 
         free(escape_data);
     }
     // Last item
-    printf("    ]\n");
+    fprintf(output, "    ]\n");
 
-    printf("  ]\n");
-    printf("}\n");
+    fprintf(output, "  ]\n");
+    fprintf(output, "}\n");
 
     fclose(fdlog);
     fclose(fdstderr);
     fclose(fdstdout);
     fclose(fdtiming);
     fclose(fdttyout);
+    fclose(output);
 }
