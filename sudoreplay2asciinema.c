@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <zlib.h>
 
 static unsigned char *escape(unsigned char *data, int *data_size)
 {
@@ -72,9 +73,26 @@ static FILE *open_file(const char *dir, const char *file)
     return fd;
 }
 
+static gzFile gz_open_file(const char *dir, const char *file)
+{
+    gzFile fd;
+    char *fullname;
+
+    asprintf(&fullname, "%s/%s", dir, file);
+
+    if((fd = gzopen(fullname, "r")) == NULL) {
+        perror(file);
+        free(fullname);
+        exit(EXIT_FAILURE);
+    }
+    free(fullname);
+    return fd;
+}
+
 int main(int argc, char *argv[])
 {
     FILE *output;
+    int gz = 1;
 
     if(argc < 2) {
         fprintf(stderr, "Syntax error\n\n");
@@ -95,8 +113,19 @@ int main(int argc, char *argv[])
     FILE *fdlog = open_file(basedir, "log");
     FILE *fdstderr = open_file(basedir, "stderr");
     FILE *fdstdout = open_file(basedir, "stdout");
-    FILE *fdtiming = open_file(basedir, "timing");
-    FILE *fdttyout = open_file(basedir, "ttyout");
+    FILE *fdtiming;
+    FILE *fdttyout;
+
+    gzFile fdgzttyout;
+    gzFile fdgztiming;
+
+    if(gz) {
+        fdgzttyout = gz_open_file(basedir, "ttyout");
+        fdgztiming = gz_open_file(basedir, "timing");
+    } else {
+        fdttyout = open_file(basedir, "ttyout");
+        fdtiming = open_file(basedir, "timing");
+    }
 
     char timestamp[64], user[64], group[64], terminal[64];
     char home[64];
@@ -151,9 +180,18 @@ int main(int argc, char *argv[])
     int first = 1;
     for(;;) {
         line = NULL, size = 0;
-        if(getline(&line, &size, fdtiming) == -1) {
-            free(line);
-            break;
+
+        if(gz) {
+            line = malloc(1024);
+            if(gzgets(fdgztiming, line, 1024) == NULL) {
+                free(line);
+                break;
+            }
+        } else {
+            if(getline(&line, &size, fdtiming) == -1) {
+                free(line);
+                break;
+            }
         }
         sscanf(line, "%u %f %u", &op, &duration, &bytes);
         free(line);
@@ -162,10 +200,18 @@ int main(int argc, char *argv[])
         fprintf(output, "    [\n");
         fprintf(output, "      %f,\n", duration);
 
+        // Read data from ttyout
         data = malloc(bytes);
-        if(fread(data, bytes, 1, fdttyout) != 1) {
-            fprintf(stderr, "Missing data in fdttyout\n");
-            exit(EXIT_FAILURE);
+        if(gz) {
+            if(gzfread(data, bytes, 1, fdgzttyout) != 1) {
+                fprintf(stderr, "Missing data in fdttyout\n");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            if(fread(data, bytes, 1, fdttyout) != 1) {
+                fprintf(stderr, "Missing data in fdttyout\n");
+                exit(EXIT_FAILURE);
+            }
         }
         escape_data = escape(data, &bytes);
         free(data);
@@ -184,7 +230,12 @@ int main(int argc, char *argv[])
     fclose(fdlog);
     fclose(fdstderr);
     fclose(fdstdout);
-    fclose(fdtiming);
-    fclose(fdttyout);
+    if(gz) {
+        gzclose(fdgztiming);
+        gzclose(fdgzttyout);
+    } else {
+        fclose(fdtiming);
+        fclose(fdttyout);
+    }
     fclose(output);
 }
