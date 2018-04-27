@@ -27,6 +27,9 @@ static unsigned char *escape(unsigned char *data, int *data_size)
         } else if(data[data_pos] == '\n') {
             sprintf((char *)&esc[esc_pos], "\\n");
             esc_pos += 2;
+        } else if(data[data_pos] == '\"') {
+            sprintf((char *)&esc[esc_pos], "\\\"");
+            esc_pos += 2;
         } else if((data[data_pos] < 32) || (data[data_pos] == '\\')) {
             sprintf((char *)&esc[esc_pos], "\\u%04x", (unsigned char)data[data_pos]);
             esc_pos += 6;
@@ -35,19 +38,19 @@ static unsigned char *escape(unsigned char *data, int *data_size)
             unicode = ((data[data_pos] & 0x07) << 18) + ((data[data_pos + 2] & 0x3F) << 12) + ((data[data_pos + 2] & 0x3F) << 6) + (data[data_pos + 3] & 0x3F);
             sprintf((char *)&esc[esc_pos], "\\u%04x", unicode);
             data_pos += 3;
-            esc_pos += 4;
+            esc_pos += 6;
         } else if((data[data_pos] & 248 == 224) && ((*data_size - data_pos) > 3)) {
             // Unicode 3 bytes
             unicode = ((data[data_pos] & 0x0F) << 12) + ((data[data_pos + 1] & 0x3F) << 6) + (data[data_pos + 2] & 0x3F);
             sprintf((char *)&esc[esc_pos], "\\u%04x", unicode);
             data_pos += 2;
-            esc_pos += 4;
+            esc_pos += 6;
         } else if((data[data_pos] & 248 == 192) && ((*data_size - data_pos) > 2)) {
             // Unicode 2 bytes
-            unicode = ((data[data_pos] & 0x1F) << 6) & (data[data_pos + 1] & 0x3F);
+            unicode = ((data[data_pos] & 0x1F) << 6) + (data[data_pos + 1] & 0x3F);
             sprintf((char *)&esc[esc_pos], "\\u%04x", unicode);
             data_pos += 1;
-            esc_pos += 4;
+            esc_pos += 6;
         } else {
             esc[esc_pos] = data[data_pos];
             esc_pos++;
